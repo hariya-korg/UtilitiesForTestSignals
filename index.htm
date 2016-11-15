@@ -1,0 +1,854 @@
+<!DOCTYPE HTML>
+<html>
+
+<head>
+    <meta charset='utf-8'></meta>
+    <title>Utilities for Test Signals</title>
+    <link type='text/css' rel='stylesheet' href='style.css'></link>
+    <script type='text/javascript' src='extendedDataView.js'></script>
+    <script type='text/javascript' src='fft.js'></script>
+    <script type='text/javascript' src='three.js'></script>
+    <script type='text/javascript' src='OrbitControlsMod.js'></script>
+    <script type='text/javascript'>
+        (function(){
+            function createTsp(sign, length, ratio) {
+                /* preprocess */
+                length = parseInt(length)|0;
+                if (!ratio) {
+                    ratio = 0.9;
+                } else if (ratio < 0.0) {
+                    ratio = 0.0;
+                } else if (ratio > 1.0) {
+                    ratio = 1.0;
+                }
+                if (sign < 0) {
+                    sign = -1.0;
+                } else {
+                    sign = 1.0;
+                }
+
+                var nyquist = parseFloat(length >> 1);
+                var effective = Math.round(nyquist * ratio);    /* effective length */
+                var offset = nyquist - effective;
+                var a = sign * Math.PI / nyquist;
+                var b = effective / nyquist;
+
+                var real = new Float32Array(length<<1>>1);
+                var imag = new Float32Array(length<<1>>1);
+
+                /* design Pink TSP in frequency domain */
+                var phase, cos, sin;
+                real[0<<1>>1]  = 1.0;
+                imag[0<<1>>1]  = 0.0;
+                for (var k = (parseInt(nyquist) - 1); (k|0) > (0|0); k = (k - 1)|0){
+                    phase   = a * k * (b * k + offset);
+                    cos     = Math.cos(phase);
+                    sin     = Math.sin(phase);
+
+                    real[k<<1>>1]               =  cos;
+                    imag[k<<1>>1]               =  sin;
+                    real[(length - k)<<1>>1]    =  cos;
+                    imag[(length - k)<<1>>1]    = -sin;
+                }
+                phase   = a * nyquist * (b * nyquist + offset);
+                real[parseInt(nyquist)<<1>>1] = Math.cos(phase);
+                imag[parseInt(nyquist)<<1>>1] = Math.sin(phase);
+
+                /* create signal in time domain */
+                var fft = new FFTNayukis(length<<1>>1);
+                fft.ifft(real, imag);
+
+                /* adjust the signal */
+                normalize(real);
+
+                length = null;
+                ratio = null;
+
+                nyquist = null;
+                effective = null;
+                offset = null;
+                a = null;
+                b = null;
+                imag = null;
+
+                phase = null;
+                cos = null;
+                sin = null;
+                fft = null;
+
+                return real;
+            }
+
+            function createUpTsp(length, ratio) {
+                return createTsp(-1.0, length, ratio);
+            }
+
+            function createDownTsp(length, ratio) {
+                return createTsp(1.0, length, ratio);
+            }
+
+            function createPinkTsp(sign, length, ratio) {
+                /* preprocess */
+                length = parseInt(length)|0;
+                if (!ratio) {
+                    ratio = 1.0;
+                } else if (ratio < 0.0) {
+                    ratio = 0.0;
+                } else if (ratio > 1.0) {
+                    ratio = 1.0;
+                }
+                if (sign < 0) {
+                    sign = -1.0;
+                } else {
+                    sign = 1.0;
+                }
+
+                var nyquist = (length >> 1)|0;
+                var effective = Math.round(nyquist * ratio * 0.5) * 2.0;            /* effective length */
+                var a = sign * Math.PI * effective / (nyquist * Math.log(nyquist)); /* a constant for phase */
+
+                var real = new Float32Array(length<<1>>1);
+                var imag = new Float32Array(length<<1>>1);
+
+                /* design Pink TSP in frequency domain */
+                var mag, phase, cos, sin;
+                real[0<<1>>1] = 1.0;
+                imag[0<<1>>1] = 0.0;
+                for (var k = (nyquist - 1)|0; (k|0) > (0|0); k = (k - 1)|0){
+                    mag     = Math.sqrt(1.0 / k);
+                    phase   = a * k * Math.log(k);
+                    cos     = mag * Math.cos(phase);
+                    sin     = mag * Math.sin(phase);
+
+                    real[k<<1>>1]           =  cos;
+                    imag[k<<1>>1]           =  sin;
+                    real[(length - k)|0]    =  cos;
+                    imag[(length - k)|0]    = -sin;
+                }
+                mag     = Math.sqrt(1.0 / nyquist);
+                phase   = a * nyquist * Math.log(nyquist);
+                real[nyquist<<1>>1] = mag * Math.cos(phase);
+                imag[nyquist<<1>>1] = mag * Math.sin(phase);
+
+                /* create signal in time domain */
+                var fft = new FFTNayukis(length<<1>>1);
+                fft.ifft(real, imag);
+
+                /* calculate shift */
+                var min = parseInt(Math.round(effective * (1.0 + (1.0 / Math.log(nyquist))) - length));
+                var shift = -1|0;
+                while ((real[(length + shift - 1)|0] < real[(length + shift)|0]) && ((shift|0) > (min|0))) {
+                    shift = (shift - 1)|0;
+                }
+                if ((shift|0) === (min|0)) {
+                    shift = 0|0;
+                    imag = real;
+                } else {
+                    /* shift the signal */
+                    for (var index = shift|0; (index|0) < (0|0); index = (index + 1)|0){
+                        imag[(index - shift)|0] = real[(index + length)|0];
+                    }
+                    for (var index = (length + shift - 1)|0; (index|0) >= (0|0); index = (index - 1)|0){
+                        imag[(index - shift)|0] = real[index<<1>>1];
+                    }
+                }
+
+                /* adjust the signal */
+                var offset = -0.5 * (imag[0<<1>>1] + imag[(length - 1)|0]);
+                normalize(imag, offset);
+
+                nyquist = null;
+                effective = null;
+                a = null;
+                real = null;
+
+                mag = null;
+                phase = null;
+                cos = null;
+                sin = null;
+
+                fft = null;
+                min = null;
+                shift = null;
+                offset = null;
+
+                return imag;
+            }
+
+            function createUpPtsp(length, ratio) {
+                return createPinkTsp(-1.0, length, ratio);
+            }
+
+            function createDownPtsp(length, ratio) {
+                return createPinkTsp(1.0, length, ratio);
+            }
+
+            function createInversePinkTsp(sign, length, ratio) {
+                /* preprocess */
+                length = parseInt(length)|0;
+                if (!ratio) {
+                    ratio = 1.0;
+                } else if (ratio < 0.0) {
+                    ratio = 0.0;
+                } else if (ratio > 1.0) {
+                    ratio = 1.0;
+                }
+                if (sign < 0) {
+                    sign = -1.0;
+                } else {
+                    sign = 1.0;
+                }
+
+                var nyquist = (length >> 1)|0;
+                var effective = Math.round(nyquist * ratio * 0.5) * 2.0;            /* effective length */
+                var a = sign * Math.PI * effective / (nyquist * Math.log(nyquist)); /* a constant for phase */
+
+                var real = new Float32Array(length<<1>>1);
+                var imag = new Float32Array(length<<1>>1);
+
+                /* design Pink TSP in frequency domain */
+                var mag, phase, cos, sin;
+                real[0<<1>>1] = 1.0;
+                imag[0<<1>>1] = 0.0;
+                for (var k = (nyquist - 1)|0; (k|0) > (0|0); k = (k - 1)|0){
+                    mag     = Math.sqrt(k);
+                    phase   = a * k * Math.log(k);
+                    cos     = mag * Math.cos(phase);
+                    sin     = mag * Math.sin(phase);
+
+                    real[k<<1>>1]           =  cos;
+                    imag[k<<1>>1]           =  sin;
+                    real[(length - k)|0]    =  cos;
+                    imag[(length - k)|0]    = -sin;
+                }
+                mag     = Math.sqrt(1.0 / nyquist);
+                phase   = a * nyquist * Math.log(nyquist);
+                real[nyquist<<1>>1] = mag * Math.cos(phase);
+                imag[nyquist<<1>>1] = mag * Math.sin(phase);
+
+                /* create signal in time domain */
+                var fft = new FFTNayukis(length<<1>>1);
+                fft.ifft(real, imag);
+
+                /* calculate shift */
+                var min = parseInt(Math.round(effective * (1.0 + (1.0 / Math.log(nyquist))) - length));
+                var shift = -1|0;
+                while ((real[(length + shift - 1)|0] < real[(length + shift)|0]) && ((shift|0) > (min|0))) {
+                    shift = (shift - 1)|0;
+                }
+                if ((shift|0) === (min|0)) {
+                    shift = 0|0;
+                    imag = real;
+                } else {
+                    /* shift the signal */
+                    for (var index = shift|0; (index|0) < (0|0); index = (index + 1)|0){
+                        imag[(index - shift)|0] = real[(index + length)|0];
+                    }
+                    for (var index = (length + shift - 1)|0; (index|0) >= (0|0); index = (index - 1)|0){
+                        imag[(index - shift)|0] = real[index<<1>>1];
+                    }
+                }
+
+                /* adjust the signal */
+                var offset = -0.5 * (imag[0<<1>>1] + imag[(length - 1)|0]);
+                normalize(imag, offset);
+
+                nyquist = null;
+                effective = null;
+                a = null;
+                real = null;
+
+                mag = null;
+                phase = null;
+                cos = null;
+                sin = null;
+
+                fft = null;
+                min = null;
+                shift = null;
+                offset = null;
+
+                return imag;
+            }
+
+            function createUpIptsp(length, ratio) {
+                return createInversePinkTsp(-1.0, length, ratio);
+            }
+
+            function createDownIptsp(length, ratio) {
+                return createInversePinkTsp(1.0, length, ratio);
+            }
+
+            function convertToPower2(value) {
+                var v = value;
+                value = 1|0;
+                while (v|0) {
+                    value = value << 1;
+                    v = v >> 1;
+                }
+                v = null;
+                return value|0;
+            }
+
+            function normalize(array, offset){
+                if (!offset) {
+                    offset = 0.0;
+                }
+
+                var temp = array.slice(0);
+                temp.sort();
+                var max = temp[(temp.length - 1)|0] + offset;
+                var min = -(temp[0<<1>>1] + offset);
+                if (max < min) {
+                    max = min;
+                }
+
+                var normalize = 1.0 / max;
+                for (var index = (array.length - 1)|0; (index|0) >= (0|0); index = (index - 1)|0){
+                    array[index<<1>>1] = (array[index<<1>>1] + offset) * normalize;
+                }
+                array.offset = -offset * normalize;
+
+                array = null;
+                offset = null;
+
+                temp = null;
+                max = null;
+                min = null;
+                normalize = null;
+            }
+
+            function computeImpulseResponse(audioContext, response, inverse, offset) {
+                var channel = inverse.numberOfChannels|0;
+                var sampleRate = inverse.sampleRate|0;
+                if (channel !== response.numberOfChannels) {
+                    alert('Conflicting number of channels in computeImpulseResponse().');
+                } else if (sampleRate !== response.sampleRate) {
+                    alert('Conflicting sampleRate in computeImpulseResponse().');
+                }
+
+                var length = inverse.length << 1;
+                var output = audioContext.createBuffer(channel|0, length >> 1, sampleRate|0);
+                var rr = new Float32Array(length<<1>>1);
+                var ri = new Float32Array(length<<1>>1);
+                var ir = new Float32Array(length<<1>>1);
+                var ii = new Float32Array(length<<1>>1);
+                var fft = new FFTNayukis(length<<1>>1);
+                var normalize = 1.0 / parseFloat(length);
+                var data = null, start = 0|0, end = 0|0, temp = 0.0;
+                for (var ch = (channel - 1)|0; (ch|0) >= (0|0); ch = (ch - 1)|0) {
+                    /* copy the response to a real part */
+                    data = response.getChannelData(ch<<1>>1);
+                    start = 0|0;
+                    if ((start|0) > (offset|0)) {
+                        start = -offset|0;
+                    }
+                    end = (data.length - offset)|0;
+                    if ((end|0) > (length|0)) {
+                        end = length|0;
+                    }
+                    for (var index = (length - 1)|0; (index|0) >= (end|0); index = (index - 1)|0) {
+                        rr[index<<1>>1] = 0.0;
+                    }
+                    for (var index = (end - 1)|0; (index|0) >= (start|0); index = (index - 1)|0) {
+                        rr[index<<1>>1] = data[(index + offset)<<1>>1] * normalize;
+                    }
+                    for (var index = offset|0; (index|0) < (0|0); index = (index + 1)|0) {
+                        rr[index<<1>>1] = 0.0;
+                    }
+
+                    /* copy the inverse to a real part */
+                    data = inverse.getChannelData(ch<<1>>1);
+                    end = length >> 1;
+                    for (var index = (end - 1)|0; (index|0) >= (0|0); index = (index - 1)|0) {
+                        ir[index<<1>>1] = data[index<<1>>1] * normalize;
+                        ir[(index + end)<<1>>1] = 0.0;
+                    }
+
+                    /* initialize imaginary parts */
+                    for (var index = (length - 1)|0; (index|0) >= (0|0); index = (index - 1)|0) {
+                        ri[index<<1>>1] = 0.0;
+                        ii[index<<1>>1] = 0.0;
+                    }
+
+                    /* convolve them in frequency domain */
+                    fft.fft(rr, ri);
+                    fft.fft(ir, ii);
+                    for (var index = (length - 1)|0; (index|0) >= (0|0); index = (index - 1)|0) {
+                        temp = rr[index<<1>>1];
+                        rr[index<<1>>1] = temp * ir[index<<1>>1] - ri[index<<1>>1] * ii[index<<1>>1];
+                        ri[index<<1>>1] = temp * ii[index<<1>>1] + ir[index<<1>>1] * ri[index<<1>>1];
+                    }
+                    fft.ifft(rr, ri);
+
+                    /* copy output data */
+                    data = output.getChannelData(ch<<1>>1);
+                    end = length >> 1;
+                    for (var index = (end - 1)|0; (index|0) >= (0|0); index = (index - 1)|0) {
+                        data[index<<1>>1] = rr[(index + end)<<1>>1];
+                    }
+                }
+
+                channel = null;
+                sampleRate = null;
+                length = null;
+
+                rr = null;
+                ri = null;
+                ir = null;
+                ii = null;
+                fft = null;
+
+                data = null;
+                start = null;
+                end = null;
+                temp = null;
+
+                return output;
+            }
+
+            /* Read a wav file */
+            function readWavAsAudioBuffer(audioContext, file, onload) {
+                var reader = new FileReader();
+                reader.onload = function(event) {
+                    var offset = 0|0;
+			        var view = new ExtendedDataView(this.result);
+
+			        if (view.getString(offset|0, 4|0) === 'RIFF') {
+                        offset = (offset + 8)|0;
+                        if (view.getString(offset|0, 4|0) === 'WAVE') {
+                            offset = (offset + 4)|0;
+
+                            /* read property */
+                            while (view.getString(offset|0, 4|0) !== 'fmt ') {
+                                offset = (offset + 8 + view.getUint32((offset + 4)|0, true))|0;
+                            }
+                            var format = view.getUint16((offset + 8)|0, true);
+                            var channel = view.getUint16((offset + 10)|0, true);
+                            var sampleRate = view.getUint32((offset + 12)|0, true);
+                            var bit = view.getUint16((offset + 22)|0, true);
+                            offset = (offset + 24)|0;
+
+                            if ((format|0) === (1|0)) {
+                                switch (bit) {
+                                    case 16:view.getArrayAsFloat32 = view.getInt16ArrayAsFloat32;break;
+                                    case 24:view.getArrayAsFloat32 = view.getInt24ArrayAsFloat32;break;
+                                    case 32:view.getArrayAsFloat32 = view.getInt32ArrayAsFloat32;break;
+                                    default:
+                                }
+
+                                /* read data */
+                                while (view.getString(offset|0, 4|0) !== 'data') {
+                                    offset = (offset + 8 + view.getUint32((offset + 4)|0, true))|0;
+                                }
+                                var length = (view.getUint32((offset + 4)|0, true) / (channel * (bit >> 3)))|0;
+                                var id = view.getArrayAsFloat32((offset + 8)|0, (length * channel)|0, true);
+
+                                var buffer = audioContext.createBuffer(channel|0, length|0, sampleRate|0);
+                                var data = null;
+                                for (var ch = (channel - 1)|0; (ch|0) >= (0|0); ch = (ch - 1)|0) {
+                                    data = buffer.getChannelData(ch<<1>>1);
+                                    for (var index = (length - 1)|0; (index|0) >= (0|0); index = (index - 1)|0) {
+                                        data[index<<1>>1] = id[(channel * index + ch)<<1>>1];
+                                    }
+                                }
+                                buffer.bit = bit|0;
+                                onload(buffer);
+
+                                length = null;
+                                id = null;
+                                buffer = null;
+                                data = null;
+                            }
+                            format = null;
+                            channel = null;
+                            sampleRate = null;
+                            bit = null;
+                        }
+                    }
+                    audioContext = null;
+                    onload = null;
+
+                    offset = null;
+                    view = null;
+                }
+                reader.readAsArrayBuffer(file);
+                file = null;
+                reader = null;
+            }
+
+            /* Write & Download a wav file */
+            function downloadWavFromAudioBuffer(audio, filename, bit){
+                /* preprocess */
+                if (!bit) {
+                  bit = 16|0;
+                }
+                if (!filename) {
+                    filename = 'JavaScript.wav';
+                }
+                var sampleRate = parseInt(audio.sampleRate);
+                var channel = parseInt(audio.numberOfChannels);
+                var length = parseInt(audio.length);
+
+                /* create interleaved data */
+                var id = new Float32Array((channel * length)|0);    /* interleaved data */
+                var cd;                                             /* channel data */
+                for (var c = (channel - 1)|0; (c|0) >= (0|0); c = (c - 1)|0) {
+                    cd = audio.getChannelData(c<<1>>1);
+                    for (var l = (length - 1)|0; (l|0) >= (0|0); l = (l - 1)|0) {
+                        id[(channel * l + c)|0] = cd[l<<1>>1];
+                    }
+                }
+
+                /* create binary data */
+                var format = 1|0;   /* linear PCM */
+                var block = ((bit >> 3) * channel)|0;
+                var size = (44 + length * block)|0;
+                var array = new ArrayBuffer(size<<1>>1);
+                var view = new ExtendedDataView(array);
+                switch (bit) {
+                    case 16:view.setFloat32Array = view.setFloat32ArrayAsInt16;break;
+                    case 24:view.setFloat32Array = view.setFloat32ArrayAsInt24;break;
+                    case 32:view.setFloat32Array = view.setFloat32ArrayAsInt32;break;
+                    default:
+                }
+
+                view.setString( 0|0, 'RIFF');
+                view.setUint32( 4|0, (size - 8)|0, true);
+                view.setString( 8|0, 'WAVE');
+                view.setString(12|0, 'fmt ');
+                view.setUint32(16|0, 16|0, true);
+                view.setUint16(20|0, format|0, true);
+                view.setUint16(22|0, channel|0, true);
+                view.setUint32(24|0, sampleRate|0, true);
+                view.setUint32(28|0, (sampleRate * block)|0, true);
+                view.setUint16(32|0, block|0, true);
+                view.setUint16(34|0, bit|0, true);
+                view.setString(36|0, 'data');
+                view.setUint32(40|0, (size - 44)|0, true);
+                view.setFloat32Array(44|0, id, true);
+
+                /* download the binary data */
+                var blob = new Blob([view], {type:'audio/wav'});
+                var a = document.createElement('a');
+                a.href = window.URL.createObjectURL(blob);
+                a.download = filename;
+                a.click();
+
+                audio = null;
+                filename = null;
+                bit = null;
+
+                sampleRate = null;
+                channel = null;
+                length = null;
+                id = null;
+                cd = null;
+
+                format = null;
+                block = null;
+                size = null;
+                array = null;
+                view = null;
+
+                blob = null;
+                a = null;
+            };
+
+            var geometries = [new THREE.Geometry(), new THREE.Geometry()];
+            var controls = null;
+            function initializeGraph() {
+                var width = window.innerWidth * 0.9;
+                var height = window.innerHeight * 0.5;
+
+                var renderer = new THREE.WebGLRenderer();
+                renderer.setSize(width, height);
+                document.getElementById('graph').appendChild(renderer.domElement);
+
+                var camera = new THREE.PerspectiveCamera(90.0, width / height, 0.1, 5000.0);
+                camera.position.set(0.0, 1400.0, 0.0);
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+                var scene = new THREE.Scene();
+                var geometry = null, vertices = null;
+                var nop = 1000000|0;
+                var offset = parseFloat(nop) * 0.5;
+                var distance = 100.0, y = 0.0;
+                var colors = [0x23c886|0, 0xd10054];
+                for (var ch = 1|0; (ch|0) >= (0|0); ch = (ch - 1)|0) {
+                    geometry = geometries[ch<<1>>1];
+                    vertices = geometry.vertices;
+                    y = distance * (0.5 - parseFloat(ch));
+                    for (var index = parseInt(nop); (index|0) > (0|0); index = (index - 1)|0) {
+                        vertices.push(new THREE.Vector3(0.01 * (offset - parseFloat(index)), y, 0));
+                    }
+                    scene.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({color:colors[ch<<1>>1], linewidth:100})));
+                }
+
+                (function render(){
+                    renderer.clear();
+                    requestAnimationFrame(render);
+                    renderer.render(scene, camera);
+                    controls.update();
+                })();
+
+                width = null;
+                height = null;
+
+                geometry = null;
+                vertices = null;
+                nop = null;
+                offset = null;
+                distance = null;
+                y = null;
+                colors = null;
+            }
+
+            function updateGraph(buffer) {
+                var channel = buffer.numberOfChannels|0;
+                var length = buffer.length|0;
+                var geometry = geometries[0<<1>>1];
+                var vertices = geometry.vertices;
+                if ((length|0) > (vertices.length|0)) {
+                    length = vertices.length|0;
+                }
+
+                var data = null;
+                for (var ch = 1|0; (ch|0) >= (0|0); ch = (ch - 1)|0) {
+                    geometry = geometries[ch<<1>>1];
+                    vertices = geometry.vertices;
+                    if ((ch|0) < (channel|0)) {
+                        data = buffer.getChannelData(ch<<1>>1);
+                    } else {
+                        data = buffer.getChannelData(0<<1>>1);
+                    }
+                    for (var index = (length - 1)|0; (index|0) >= (0|0); index = (index - 1)|0) {
+                        vertices[index<<1>>1].z = -1000.0 * data[index<<1>>1];
+                    }
+                    geometry.verticesNeedUpdate = true;
+                }
+                resetCameraPosition();
+
+                channel = null;
+                length = null;
+                geometry = null;
+                vertices = null;
+                data = null;
+            }
+
+            function resetCameraPosition() {
+                controls.reset();
+            }
+
+            function test(audioContext) {
+                /*
+                    This function creates a stereo/16bit/44.1kHz/2.0sec wave file
+                    which contains a sine wave of 440Hz.
+                */
+
+                var sampleRate = 96000|0;
+                var channel = 2|0;
+                var bit = 24|0;
+                var second = 20.0;
+                var length = parseInt(second * sampleRate)|0;
+                var frequency = 440.0 / (sampleRate * 0.5); /* normalized frequency */
+
+                var buffer = audioContext.createBuffer(channel|0, length|0, sampleRate|0);
+                var lch = buffer.getChannelData(0<<1>>1);
+                var rch = buffer.getChannelData(1<<1>>1);
+                var temp = 0.0;
+                for (var index = (length - 1)|0; (index|0) >= (0|0); index = (index - 1)|0) {
+                    temp = Math.sin(Math.PI * frequency * index);
+                    lch[index<<1>>1] = temp;
+                    rch[index<<1>>1] = temp;
+                }
+                downloadWavFromAudioBuffer(buffer, null, bit<<1>>1);
+
+                audioContext = null;
+                sampleRate = null;
+                channel = null;
+                bit = null;
+                second = null;
+                length = null;
+                frequency = null;
+
+                buffer = null;
+                lch = null;
+                rch = null;
+                temp = null;
+            }
+
+            function onDOMContentLoaded(event) {
+                var audioContext = new AudioContext();
+
+                var createSignal = [null, createUpTsp, createUpPtsp];
+                document.getElementById('signal').addEventListener('click', function(event) {
+                    var bit = parseInt(document.getElementById('bit').value);
+                    var sampleRate = parseInt(document.getElementById('rate').value);
+                    var channel = parseInt(document.getElementById('channel').value);
+                    var length = convertToPower2(parseInt(sampleRate * parseFloat(document.getElementById('second').value)));
+                    var type = parseInt(document.getElementById('type').value);
+
+                    var signal = createSignal[type<<1>>1](length|0);
+                    var buffer = audioContext.createBuffer(channel|0, length|0, sampleRate|0);
+                    var data = null;
+                    for (var ch = (channel - 1)|0; (ch|0) >= (0|0); ch = (ch - 1)|0) {
+                        data = buffer.getChannelData(ch<<1>>1);
+                        for (var index = (length - 1)|0; (index|0) >= (0|0); index = (index - 1)|0) {
+                            data[index<<1>>1] = signal[index<<1>>1];
+                        }
+                    }
+
+                    downloadWavFromAudioBuffer(buffer, 'signal.wav', bit<<1>>1)
+
+                    bit = null;
+                    sampleRate = null;
+                    channel = null;
+                    lenth = null;
+                    type = null;
+
+                    signal = null;
+                    buffer = null;
+                    data = null;
+                }, false);
+
+                var createInverse = [null, createDownTsp, createDownIptsp];
+                document.getElementById('dinverse').addEventListener('click', function(event) {
+                    var bit = parseInt(document.getElementById('bit').value);
+                    var sampleRate = parseInt(document.getElementById('rate').value);
+                    var channel = parseInt(document.getElementById('channel').value);
+                    var length = convertToPower2(parseInt(sampleRate * parseFloat(document.getElementById('second').value)));
+                    var type = parseInt(document.getElementById('type').value);
+
+                    var signal = createInverse[type<<1>>1](length|0);
+                    var buffer = audioContext.createBuffer(channel|0, length|0, sampleRate|0);
+                    var data = null;
+                    for (var ch = (channel - 1)|0; (ch|0) >= (0|0); ch = (ch - 1)|0) {
+                        data = buffer.getChannelData(ch<<1>>1);
+                        for (var index = (length - 1)|0; (index|0) >= (0|0); index = (index - 1)|0) {
+                            data[index<<1>>1] = signal[index<<1>>1];
+                        }
+                    }
+
+                    downloadWavFromAudioBuffer(buffer, 'inverse.wav', bit<<1>>1)
+
+                    bit = null;
+                    sampleRate = null;
+                    channel = null;
+                    lenth = null;
+                    type = null;
+
+                    signal = null;
+                    buffer = null;
+                    data = null;
+                }, false);
+
+                var response = null;
+                document.getElementById('response').addEventListener('change', function(event) {
+                    if (event.target.files.length) {
+                        readWavAsAudioBuffer(audioContext, event.target.files[0<<1>>1], function(buffer){
+                            response = buffer;
+                        });
+                    } else {
+                        response = null;
+                    }
+                }, false);
+
+                var inverse = null;
+                document.getElementById('uinverse').addEventListener('change', function(event) {
+                    if (event.target.files.length) {
+                        readWavAsAudioBuffer(audioContext, event.target.files[0<<1>>1], function(buffer){
+                            inverse = buffer;
+                        });
+                    } else {
+                        inverse = null;
+                    }
+                }, false);
+
+                document.getElementById('impulse').addEventListener('click', function(event) {
+                    if (response && inverse) {
+                        var bit = response.bit|0;   /* readWavAsAudioBuffer() */
+                        var offset = parseInt(document.getElementById('offset').value);
+                        var impulse = computeImpulseResponse(audioContext, response, inverse, offset<<1>>1);
+                        var dat = null;
+                        for (var ch = (impulse.numberOfChannels - 1)|0; (ch|0) >= (0|0); ch = (ch - 1)|0) {
+                            normalize(impulse.getChannelData(ch<<1>>1));
+                        }
+                        downloadWavFromAudioBuffer(impulse, 'ir.wav', bit<<1>>1);
+                        updateGraph(impulse)
+
+                        bit = null;
+                        offset = null;
+                        impulse = null;
+                        data = null;
+                    } else {
+                        alert('Please select response and inverse filter files.');
+                    }
+                }, false);
+
+                document.getElementById('reset').addEventListener('click', function(event) {
+                    resetCameraPosition();
+                }, false);
+
+                initializeGraph();
+            }
+
+            window.addEventListener('DOMContentLoaded', onDOMContentLoaded, false);
+        })();
+    </script>
+</head>
+
+<body>
+    <table border='1' width='600' align='center'>
+        <tr>
+            <td>Bit Depth</td>
+            <td>Sample Rate</td>
+            <td>Channel</td>
+            <td>Second</td>
+            <td>Type</td>
+        </tr>
+        <tr>
+            <td><select id='bit'>
+                <option value='16'>16</option>
+                <option value='24'>24</option>
+                <option value='32'>32</option>
+            </select></td>
+            <td><select id='rate'>
+                <option value='44100'>44100</option>
+                <option value='48000'>48000</option>
+                <option value='88200'>88200</option>
+                <option value='96000'>96000</option>
+            </select></td>
+            <td><select id='channel'>
+                <option value='1'>Mono</option>
+                <option value='2'>Stereo</option>
+            </select></td>
+            <td><input type='text' id='second' style='height:11px;' size='1' value='1.0'></input></td>
+            <td><select id='type'>
+                <option value='1'>TSP</option>
+                <option value='2'>Pink TSP</option>
+                <!--<option value='3'>MLS</option>-->
+            </select></td>
+        </tr>
+    </table>
+    <input type='button' id='signal' value='測定信号を保存'></input>
+    <input type='button' id='dinverse' value='逆フィルタを保存'></input>
+    <p></p>
+    <table border='1' width='600' align='center'>
+        <tr>
+            <td>応答信号</td>
+            <td>逆フィルタ</td>
+            <td>オフセット</td>
+        </tr>
+        <tr>
+            <td><input type='file' id='response'></input></td>
+            <td><input type='file' id='uinverse'></input></td>
+            <td><input type='text' id='offset' style='height:11px;' size='1' value='0'></input></td>
+        </tr>
+    </table>
+    <input type='button' id='impulse' value='インパルス応答を保存'></input>
+    <p id='graph'></p>
+    <input type='button' id='reset' value='初期位置に戻す'></input>
+</body>
+
+</html>
